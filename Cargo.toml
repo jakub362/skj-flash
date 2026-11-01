@@ -1,0 +1,33 @@
+[package]
+name = "skj-flash"
+version = "0.1.0"
+edition = "2021"
+description = "SKJ Flash - make bootable USB drives on Windows, Linux and macOS"
+authors = ["SKJ Tech"]
+# GPL to match SKJ Files, and because the multiboot work will build on GRUB.
+license = "GPL-3.0-only"
+# The one place the project's home is written down. Moving the repo means changing this line
+# and the git remote - nothing else.
+repository = "https://github.com/jakub362/skj-flash"
+
+# The Slint UI comes once the core is proven against real hardware; until then this is a CLI,
+# so the dangerous part can be tested without a window in the way.
+
+[dependencies]
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_SystemInformation",
+    "Win32_System_SystemServices",
+] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
