@@ -48,6 +48,7 @@ export global S {
     callback selftest();
     callback start-write();
     callback cancel();
+    callback elevate();
 }
 
 component Btn inherits Rectangle {
@@ -167,15 +168,31 @@ export component AppWindow inherits Window {
 
         // Raw disks need administrator; saying so up front beats a baffling error later.
         if !S.elevated: Rectangle {
-            height: 38px;
+            height: 42px;
             border-radius: 8px;
             background: Theme.danger.with-alpha(0.14);
             border-width: 1px;
             border-color: Theme.danger.with-alpha(0.5);
-            Text {
-                text: "Not running as administrator — drives can be listed but not written.";
-                color: Theme.text;
-                font-size: 12px;
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 10px;
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: "Drives can be listed, but writing needs administrator.";
+                        color: Theme.text;
+                        font-size: 12px;
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                VerticalLayout {
+                    alignment: center;
+                    Btn {
+                        text: "Restart as admin";
+                        clicked => { S.elevate(); }
+                    }
+                }
             }
         }
 

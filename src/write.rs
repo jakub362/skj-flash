@@ -371,3 +371,35 @@ mod tests {
         assert_eq!(empty.percent(), 0.0);
     }
 }
+
+/// Ask Windows to start another copy of SKJ Flash elevated, and tell this one to go.
+///
+/// The app deliberately does not demand administrator at launch - looking at the drive list needs
+/// none, and a UAC prompt just to read is rude. This is offered only when the person asks for
+/// something that genuinely needs it.
+#[cfg(windows)]
+pub fn relaunch_elevated() -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let wide = |s: &std::ffi::OsStr| -> Vec<u16> { s.encode_wide().chain(Some(0)).collect() };
+    let verb = wide(std::ffi::OsStr::new("runas"));
+    let file = wide(exe.as_os_str());
+    let r = unsafe {
+        ShellExecuteW(None, PCWSTR(verb.as_ptr()), PCWSTR(file.as_ptr()), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL)
+    };
+    // ShellExecuteW returns a fake HINSTANCE; anything above 32 means it started
+    if r.0 as usize > 32 {
+        Ok(())
+    } else {
+        Err("Windows would not start an elevated copy (the prompt may have been refused)".into())
+    }
+}
+
+#[cfg(not(windows))]
+pub fn relaunch_elevated() -> Result<(), String> {
+    Err("Run SKJ Flash with sudo".into())
+}

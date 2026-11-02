@@ -130,6 +130,21 @@ pub fn run() -> Result<(), slint::PlatformError> {
         ui.global::<S>().on_cancel(move || c.store(true, Ordering::SeqCst));
     }
 
+    {
+        let w = ui.as_weak();
+        ui.global::<S>().on_elevate(move || match write::relaunch_elevated() {
+            // the elevated copy takes over; this one has nothing left to do
+            Ok(()) => { let _ = slint::quit_event_loop(); }
+            Err(e) => {
+                if let Some(ui) = w.upgrade() {
+                    let g = ui.global::<S>();
+                    g.set_state(FAILED);
+                    g.set_status(SharedString::from(e));
+                }
+            }
+        });
+    }
+
     ui.run()
 }
 

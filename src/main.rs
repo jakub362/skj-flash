@@ -9,6 +9,7 @@
 //!     skj-flash selftest <dev>    prove writing works, then put the drive back as it was
 
 mod disk;
+mod multiboot;
 mod gui;
 mod write;
 
