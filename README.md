@@ -8,9 +8,9 @@ all Windows APIs. Making that work on Linux and macOS is a rewrite rather than a
 is written fresh in Rust, which also means it shares the SKJ App Pack's UI, build and release setup.
 
 **Status: early.** On Windows, drive detection and raw writing work and are verified on real
-hardware, and there is a GUI. Multiboot lays a drive out correctly but does not boot yet, because
-the GRUB binary is built by CI and not yet shipped. Linux and macOS are not implemented, and
-Windows To Go is still to come.
+hardware, and there is a GUI. Multiboot is complete — layout, formatting, bootloader and menu —
+but has not yet been booted on a real machine. Linux and macOS are not implemented, and Windows
+To Go is still to come.
 
 ## Using it
 

@@ -18,7 +18,7 @@
 //!
 //! This module owns the planning and the generated config - the parts that can be checked without
 //! a disk. Partitioning and formatting live behind `apply`, and the GRUB binaries are not shipped
-//! here yet (see `BOOTLOADER_NOTE`).
+//! carried inside the binary (see `BOOTX64_EFI`).
 
 /// Disks are happiest when partitions start on a 1 MiB boundary: it suits every erase block size
 /// that flash uses, and every alignment the firmware cares about.
@@ -145,16 +145,17 @@ menuentry "Shut down" {{ halt }}
     )
 }
 
-/// Still missing before a prepared stick will actually boot.
+/// The bootloader, carried inside the binary so a prepared drive needs nothing downloaded.
 ///
-/// GRUB has to be built, or taken from a distribution, as a standalone EFI binary with the
-/// modules above baked in - SKJ Flash cannot compile GRUB. The plan is to build it once in CI
-/// with `grub-mkstandalone` and ship the result, which GPL-3.0 allows as long as the source and
-/// the build script go with it.
-pub const BOOTLOADER_NOTE: &str = "\
-Multiboot needs a GRUB2 EFI binary at \\EFI\\BOOT\\BOOTX64.EFI on the ESP.
-SKJ Flash does not ship one yet, so a prepared drive will not boot until it does.
-The layout, the formatting and the menu are already correct.";
+/// GRUB2, built by `.github/workflows/grub.yml` with `grub-mkstandalone` from the distribution's
+/// own GRUB source, with exactly the modules `grub_cfg` uses baked in. SKJ Flash cannot compile
+/// GRUB, and shipping somebody else's prebuilt blob would mean trusting a binary nobody can
+/// account for — building it in the open is also what makes the GPL obligation honest. To
+/// refresh it, run that workflow and drop the artifact back here.
+pub const BOOTX64_EFI: &[u8] = include_bytes!("../assets/boot/BOOTX64.EFI");
+
+pub const BOOTLOADER_NOTE: &str =
+    "The bootloader is GRUB2, built from source by this project's own workflow.";
 
 #[cfg(test)]
 mod tests {
@@ -262,10 +263,13 @@ pub fn prepare(dev: &crate::disk::Device, mut progress: impl FnMut(&str)) -> Res
     let script = diskpart_script(disk, layout.esp_size / (1024 * 1024));
     run_diskpart(&script)?;
 
+    progress("Installing the bootloader…");
+    install_bootloader()?;
+
     progress("Writing the boot menu…");
     write_grub_cfg()?;
 
-    progress("Done — except the bootloader itself.");
+    progress("Ready.");
     Ok(())
 }
 
@@ -298,6 +302,32 @@ fn run_diskpart(script: &str) -> Result<(), String> {
 
 #[cfg(not(windows))]
 fn run_diskpart(_script: &str) -> Result<(), String> {
+    Err("Preparing a drive is only implemented on Windows so far".into())
+}
+
+/// Put GRUB where the firmware looks for it: `\EFI\BOOT\BOOTX64.EFI` on the ESP.
+///
+/// That exact path is the removable-media fallback every UEFI firmware tries, which is why this
+/// boots without registering anything in the machine's NVRAM.
+#[cfg(windows)]
+fn install_bootloader() -> Result<(), String> {
+    let esp = find_labelled("SKJBOOT")
+        .ok_or("Could not find the SKJBOOT partition after formatting it")?;
+    let dir = std::path::Path::new(&esp).join("EFI").join("BOOT");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let efi = dir.join("BOOTX64.EFI");
+    std::fs::write(&efi, BOOTX64_EFI).map_err(|e| format!("{}: {e}", efi.display()))?;
+
+    // GRUB looks beside itself for its config as well as on the data partition, so a copy here
+    // means the menu still comes up if the data partition is ever reformatted by hand.
+    let gdir = std::path::Path::new(&esp).join("boot").join("grub");
+    std::fs::create_dir_all(&gdir).map_err(|e| format!("{}: {e}", gdir.display()))?;
+    let cfg = gdir.join("grub.cfg");
+    std::fs::write(&cfg, grub_cfg()).map_err(|e| format!("{}: {e}", cfg.display()))
+}
+
+#[cfg(not(windows))]
+fn install_bootloader() -> Result<(), String> {
     Err("Preparing a drive is only implemented on Windows so far".into())
 }
 
@@ -381,5 +411,27 @@ mod prepare_tests {
     #[test]
     fn the_script_ends_cleanly() {
         assert!(diskpart_script(0, 64).ends_with("exit\n"), "diskpart should not be left waiting");
+    }
+}
+
+#[cfg(test)]
+mod bootloader_tests {
+    use super::*;
+
+    #[test]
+    fn the_bootloader_is_a_real_efi_binary() {
+        // a drive that boots to nothing is the worst failure this program has, so check the
+        // shipped blob really is what the firmware will accept
+        assert!(BOOTX64_EFI.len() > 500_000, "too small to be GRUB with its modules");
+        assert_eq!(&BOOTX64_EFI[..2], b"MZ", "not a PE image");
+        // the PE header offset lives at 0x3C, and must point at "PE\0\0"
+        let off = u32::from_le_bytes(BOOTX64_EFI[0x3C..0x40].try_into().unwrap()) as usize;
+        assert_eq!(&BOOTX64_EFI[off..off + 4], b"PE\0\0", "no PE signature");
+        // 0x8664 = x86-64, which is what BOOTX64.EFI has to be
+        let machine = u16::from_le_bytes(BOOTX64_EFI[off + 4..off + 6].try_into().unwrap());
+        assert_eq!(machine, 0x8664, "not an x86-64 binary");
+        // subsystem 10 = EFI application
+        let subsystem = u16::from_le_bytes(BOOTX64_EFI[off + 24 + 68..off + 24 + 70].try_into().unwrap());
+        assert_eq!(subsystem, 10, "not an EFI application");
     }
 }
