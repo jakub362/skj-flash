@@ -9,12 +9,22 @@
 //!     skj-flash selftest <dev>    prove writing works, then put the drive back as it was
 
 mod disk;
+mod gui;
 mod write;
 
 use std::io::Write as _;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // No arguments means the window; the CLI is there for scripting and for testing the
+    // dangerous half without a UI in the way.
+    if args.is_empty() {
+        if let Err(e) = gui::run() {
+            eprintln!("Could not open the window: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let cmd = args.first().map(String::as_str).unwrap_or("list");
     let all = args.iter().any(|a| a == "--all" || a == "-a");
 

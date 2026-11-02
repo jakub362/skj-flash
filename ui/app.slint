@@ -1,0 +1,381 @@
+// SKJ Flash — UI. Same SKJ dark theme as SKJ Files, so the pack looks like one thing.
+
+import "fonts/Inter-Regular.ttf";
+import "fonts/Inter-Medium.ttf";
+import "fonts/Inter-SemiBold.ttf";
+
+export struct Drive {
+    path: string,
+    label: string,
+    size: string,
+    mounts: string,
+    warn: bool,
+}
+
+export global Theme {
+    out property <color> bg: #0E0F12;
+    out property <color> chrome: #16171C;
+    out property <color> raised: #24272E;
+    out property <color> hover: #FFFFFF10;
+    out property <color> press: #FFFFFF1C;
+    out property <color> border: #FFFFFF14;
+    out property <color> text: #ECEEF2;
+    out property <color> text-dim: #A3A9B4;
+    out property <color> text-faint: #6E7480;
+    in-out property <color> accent: #6C8CFF;
+    out property <color> selection: Theme.accent.with-alpha(0.26);
+    out property <color> danger: #F0565C;
+    out property <color> good: #3FB950;
+}
+
+export global S {
+    in property <[Drive]> drives: [];
+    in-out property <int> selected: -1;
+    in property <bool> elevated: false;
+    in property <string> image-path: "";
+    /// 0 idle, 1 working, 2 finished, 3 failed
+    in property <int> state: 0;
+    in property <float> progress: 0;
+    in property <string> status: "";
+    in property <string> detail: "";
+    /// shown before anything destructive; the user has to type the size back
+    in-out property <bool> confirming: false;
+    in-out property <string> confirm-typed: "";
+    in property <string> confirm-want: "";
+
+    callback refresh();
+    callback pick-image();
+    callback selftest();
+    callback start-write();
+    callback cancel();
+}
+
+component Btn inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary;
+    in property <bool> danger;
+    in property <bool> enabled: true;
+    callback clicked();
+    height: 34px;
+    min-width: 104px;
+    border-radius: 8px;
+    opacity: root.enabled ? 1.0 : 0.45;
+    background: !root.enabled ? Theme.raised
+        : root.danger ? (ta.has-hover ? Theme.danger.darker(0.15) : Theme.danger)
+        : root.primary ? (ta.has-hover ? Theme.accent.darker(0.15) : Theme.accent)
+        : (ta.has-hover ? Theme.press : Theme.raised);
+    ta := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+    Text {
+        text: root.text;
+        color: (root.primary || root.danger) ? #FFFFFF : Theme.text;
+        font-size: 13px;
+        font-weight: 600;
+    }
+}
+
+component DriveRow inherits Rectangle {
+    in property <Drive> item;
+    in property <bool> active;
+    callback clicked();
+    height: 56px;
+    border-radius: 10px;
+    background: root.active ? Theme.selection : (ta.has-hover ? Theme.hover : transparent);
+    border-width: root.active ? 1px : 0px;
+    border-color: Theme.accent;
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.item.label;
+                color: Theme.text;
+                font-size: 13px;
+                font-weight: 600;
+                overflow: elide;
+            }
+            Text {
+                text: root.item.path + (root.item.mounts == "" ? "" : "  ·  " + root.item.mounts);
+                color: Theme.text-faint;
+                font-size: 11px;
+                overflow: elide;
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.item.size;
+                color: Theme.text-dim;
+                font-size: 13px;
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "SKJ Flash";
+    preferred-width: 720px;
+    preferred-height: 560px;
+    min-width: 560px;
+    min-height: 460px;
+    background: Theme.bg;
+    default-font-family: "Inter";
+    default-font-size: 13px;
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 14px;
+
+        // ── header ──
+        HorizontalLayout {
+            spacing: 10px;
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text {
+                    text: "SKJ Flash";
+                    color: Theme.text;
+                    font-size: 19px;
+                    font-weight: 700;
+                }
+                Text {
+                    text: "Make a bootable USB drive";
+                    color: Theme.text-faint;
+                    font-size: 12px;
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            VerticalLayout {
+                alignment: center;
+                Btn {
+                    text: "Refresh";
+                    enabled: S.state != 1;
+                    clicked => { S.refresh(); }
+                }
+            }
+        }
+
+        // Raw disks need administrator; saying so up front beats a baffling error later.
+        if !S.elevated: Rectangle {
+            height: 38px;
+            border-radius: 8px;
+            background: Theme.danger.with-alpha(0.14);
+            border-width: 1px;
+            border-color: Theme.danger.with-alpha(0.5);
+            Text {
+                text: "Not running as administrator — drives can be listed but not written.";
+                color: Theme.text;
+                font-size: 12px;
+            }
+        }
+
+        // ── drives ──
+        Text {
+            text: "DRIVE";
+            color: Theme.text-faint;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            border-radius: 12px;
+            background: Theme.chrome;
+            border-width: 1px;
+            border-color: Theme.border;
+            clip: true;
+            if S.drives.length == 0: VerticalLayout {
+                alignment: center;
+                Text {
+                    text: "No removable drives found.\nPlug a USB stick in and press Refresh.";
+                    color: Theme.text-faint;
+                    font-size: 13px;
+                    horizontal-alignment: center;
+                }
+            }
+            VerticalLayout {
+                padding: 6px;
+                spacing: 2px;
+                alignment: start;
+                for d[i] in S.drives: DriveRow {
+                    item: d;
+                    active: i == S.selected;
+                    clicked => { S.selected = i; }
+                }
+            }
+        }
+
+        // ── image ──
+        Text {
+            text: "IMAGE";
+            color: Theme.text-faint;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Rectangle {
+                height: 34px;
+                horizontal-stretch: 1;
+                border-radius: 8px;
+                background: Theme.chrome;
+                border-width: 1px;
+                border-color: Theme.border;
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: S.image-path == "" ? "No image chosen" : S.image-path;
+                            color: S.image-path == "" ? Theme.text-faint : Theme.text;
+                            font-size: 12px;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+            Btn {
+                text: "Choose…";
+                enabled: S.state != 1;
+                clicked => { S.pick-image(); }
+            }
+        }
+
+        // ── progress / status ──
+        if S.state != 0: VerticalLayout {
+            spacing: 6px;
+            Rectangle {
+                height: 8px;
+                border-radius: 4px;
+                background: Theme.raised;
+                Rectangle {
+                    x: 0;
+                    width: parent.width * max(0.0, min(1.0, S.progress));
+                    height: parent.height;
+                    border-radius: 4px;
+                    background: S.state == 3 ? Theme.danger : S.state == 2 ? Theme.good : Theme.accent;
+                    animate width { duration: 120ms; }
+                }
+            }
+            Text {
+                text: S.status;
+                color: S.state == 3 ? Theme.danger : S.state == 2 ? Theme.good : Theme.text-dim;
+                font-size: 12px;
+            }
+            if S.detail != "": Text {
+                text: S.detail;
+                color: Theme.text-faint;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+        }
+
+        // ── actions ──
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+            Btn {
+                text: "Self-test";
+                enabled: S.elevated && S.selected >= 0 && S.state != 1;
+                clicked => { S.selftest(); }
+            }
+            if S.state == 1: Btn {
+                text: "Cancel";
+                clicked => { S.cancel(); }
+            }
+            Btn {
+                text: "Write";
+                danger: true;
+                enabled: S.elevated && S.selected >= 0 && S.image-path != "" && S.state != 1;
+                clicked => { S.confirm-typed = ""; S.confirming = true; }
+            }
+        }
+    }
+
+    // ── the confirmation, over everything ──
+    // Deliberately not a yes/no: the size has to be typed back, because a yes/no gets answered
+    // without being read, and this erases the drive.
+    if S.confirming: Rectangle {
+        background: #00000090;
+        TouchArea { }
+        Rectangle {
+            width: 440px;
+            height: card.preferred-height;
+            border-radius: 14px;
+            background: Theme.chrome;
+            border-width: 1px;
+            border-color: Theme.border;
+            card := VerticalLayout {
+                padding: 22px;
+                spacing: 12px;
+                Text {
+                    text: "This erases the drive";
+                    color: Theme.text;
+                    font-size: 17px;
+                    font-weight: 700;
+                }
+                Text {
+                    text: S.selected >= 0 ? S.drives[S.selected].label + "  ·  " + S.drives[S.selected].size : "";
+                    color: Theme.text;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+                if S.selected >= 0 && S.drives[S.selected].mounts != "": Text {
+                    text: "Everything on " + S.drives[S.selected].mounts + " will be lost.";
+                    color: Theme.danger;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "Type " + S.confirm-want + " to go ahead.";
+                    color: Theme.text-dim;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                Rectangle {
+                    height: 34px;
+                    border-radius: 8px;
+                    background: Theme.raised;
+                    border-width: 1px;
+                    border-color: ti.has-focus ? Theme.accent : Theme.border;
+                    ti := TextInput {
+                        text <=> S.confirm-typed;
+                        color: Theme.text;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                        single-line: true;
+                        width: parent.width - 24px;
+                        x: 12px;
+                        accepted => {
+                            if (self.text == S.confirm-want) { S.confirming = false; S.start-write(); }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Btn {
+                        text: "Cancel";
+                        clicked => { S.confirming = false; }
+                    }
+                    Btn {
+                        text: "Erase and write";
+                        danger: true;
+                        enabled: S.confirm-typed == S.confirm-want;
+                        clicked => { S.confirming = false; S.start-write(); }
+                    }
+                }
+            }
+        }
+    }
+}

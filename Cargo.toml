@@ -10,10 +10,11 @@ license = "GPL-3.0-only"
 # and the git remote - nothing else.
 repository = "https://github.com/jakub362/skj-flash"
 
-# The Slint UI comes once the core is proven against real hardware; until then this is a CLI,
-# so the dangerous part can be tested without a window in the way.
+build = "build.rs"
 
 [dependencies]
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "renderer-software"] }
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
@@ -27,6 +28,12 @@ windows = { version = "0.62", features = [
     "Win32_System_SystemServices",
     "Win32_System_Threading",
 ] }
+
+[build-dependencies]
+slint-build = "1.18"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
 
 [profile.release]
 opt-level = 3
