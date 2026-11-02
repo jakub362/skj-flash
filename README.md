@@ -7,9 +7,10 @@ Rufus is Windows-only, and deeply so — its disk access, partitioning and files
 all Windows APIs. Making that work on Linux and macOS is a rewrite rather than a port, so SKJ Flash
 is written fresh in Rust, which also means it shares the SKJ App Pack's UI, build and release setup.
 
-**Status: early.** Drive detection and raw writing work on Windows and are verified on real
-hardware. There is no GUI yet, Linux and macOS are not implemented, and Ventoy-style multiboot and
-Windows To Go are still to come.
+**Status: early.** On Windows, drive detection and raw writing work and are verified on real
+hardware, and there is a GUI. Multiboot lays a drive out correctly but does not boot yet, because
+the GRUB binary is built by CI and not yet shipped. Linux and macOS are not implemented, and
+Windows To Go is still to come.
 
 ## Using it
 
