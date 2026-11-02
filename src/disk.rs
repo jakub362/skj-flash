@@ -101,8 +101,8 @@ mod imp {
         FILE_SHARE_WRITE, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, OPEN_EXISTING,
     };
     use windows::Win32::System::Ioctl::{
-        PropertyStandardQuery, StorageDeviceProperty, GET_LENGTH_INFORMATION,
-        IOCTL_DISK_GET_LENGTH_INFO, IOCTL_STORAGE_QUERY_PROPERTY,
+        PropertyStandardQuery, StorageDeviceProperty, DISK_GEOMETRY_EX, GET_LENGTH_INFORMATION,
+        IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_DISK_GET_LENGTH_INFO, IOCTL_STORAGE_QUERY_PROPERTY,
         STORAGE_DEVICE_DESCRIPTOR, STORAGE_PROPERTY_QUERY, VOLUME_DISK_EXTENTS,
     };
     use windows::Win32::System::IO::DeviceIoControl;
@@ -192,9 +192,32 @@ mod imp {
         Some((model, d.RemovableMedia, external))
     }
 
+    /// How big the disk is.
+    ///
+    /// Geometry first, because IOCTL_DISK_GET_LENGTH_INFO wants read access and these handles
+    /// are opened with none at all - that is the whole point of them. GET_DRIVE_GEOMETRY_EX
+    /// answers without it. The length call stays as a fallback for anything that dislikes
+    /// geometry, and returns 0 only when neither works.
     fn length(h: HANDLE) -> u64 {
-        let mut li = GET_LENGTH_INFORMATION::default();
+        let mut gx = DISK_GEOMETRY_EX::default();
         let mut returned = 0u32;
+        let ok = unsafe {
+            DeviceIoControl(
+                h,
+                IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+                None,
+                0,
+                Some(&mut gx as *mut _ as *mut core::ffi::c_void),
+                std::mem::size_of::<DISK_GEOMETRY_EX>() as u32,
+                Some(&mut returned),
+                None,
+            )
+        };
+        if ok.is_ok() && gx.DiskSize > 0 {
+            return gx.DiskSize as u64;
+        }
+
+        let mut li = GET_LENGTH_INFORMATION::default();
         let ok = unsafe {
             DeviceIoControl(
                 h,
@@ -306,7 +329,7 @@ mod imp {
                 .filter(|(_, disks)| disks.contains(&n))
                 .map(|(c, _)| format!("{}:", c))
                 .collect();
-            out.push(Device {
+            let d = Device {
                 path,
                 model,
                 size,
@@ -314,7 +337,14 @@ mod imp {
                 external_bus,
                 system: sys == Some(n),
                 mounts,
-            });
+            };
+            if debug {
+                eprintln!(
+                    "[skj-flash] {} | {} | size={} removable={} external={} system={} mounts={:?}",
+                    d.path, d.model, d.size, d.removable, d.external_bus, d.system, d.mounts
+                );
+            }
+            out.push(d);
         }
         out
     }
