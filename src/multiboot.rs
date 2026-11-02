@@ -214,3 +214,172 @@ mod tests {
         assert_eq!(opens, closes, "unbalanced braces in grub.cfg");
     }
 }
+
+// ───────────────────────── preparing a drive ─────────────────────────
+
+/// The disk number Windows knows a device by: `\.\PhysicalDrive2` -> 2.
+pub fn disk_number(path: &str) -> Option<u32> {
+    path.rsplit("PhysicalDrive").next()?.parse().ok()
+}
+
+/// The diskpart script that lays the drive out.
+///
+/// Partitioning and formatting go through diskpart rather than IOCTL_DISK_SET_DRIVE_LAYOUT_EX and
+/// FormatEx. Those are the "proper" way and are what a Linux and macOS port will need anyway, but
+/// they are several hundred lines of unsafe code that cannot be exercised without destroying a
+/// real disk. diskpart is maintained by Microsoft, does exactly this job, and lets the part that
+/// *can* be checked - which disk, which sizes, which labels - stay ordinary testable code.
+///
+/// `select disk` is by number, and the number comes from a Device that already passed the safety
+/// rules, so this cannot be aimed at an uninspected disk.
+pub fn diskpart_script(disk: u32, esp_mb: u64) -> String {
+    format!(
+        "select disk {disk}\n\
+         clean\n\
+         convert gpt\n\
+         create partition efi size={esp_mb}\n\
+         format fs=fat32 quick label=SKJBOOT\n\
+         assign\n\
+         create partition primary\n\
+         format fs=exfat quick label={label}\n\
+         assign\n\
+         exit\n",
+        disk = disk,
+        esp_mb = esp_mb,
+        label = DATA_LABEL
+    )
+}
+
+/// Lay the drive out for multiboot. Erases everything on it.
+pub fn prepare(dev: &crate::disk::Device, mut progress: impl FnMut(&str)) -> Result<(), String> {
+    if dev.system {
+        return Err("Refusing: that is the disk the system runs from".into());
+    }
+    let layout = plan(dev.size)?;
+    let disk = disk_number(&dev.path).ok_or_else(|| format!("Cannot tell which disk {} is", dev.path))?;
+
+    progress("Partitioning and formatting…");
+    let script = diskpart_script(disk, layout.esp_size / (1024 * 1024));
+    run_diskpart(&script)?;
+
+    progress("Writing the boot menu…");
+    write_grub_cfg()?;
+
+    progress("Done — except the bootloader itself.");
+    Ok(())
+}
+
+#[cfg(windows)]
+fn run_diskpart(script: &str) -> Result<(), String> {
+    use std::io::Write;
+    // diskpart only reads a script from a file, not from stdin
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("skj-flash-{}.txt", std::process::id()));
+    {
+        let mut f = std::fs::File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        f.write_all(script.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    let out = std::process::Command::new("diskpart")
+        .arg("/s")
+        .arg(&path)
+        .output()
+        .map_err(|e| format!("Could not run diskpart: {e}"));
+    let _ = std::fs::remove_file(&path);
+    let out = out?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        // diskpart says what went wrong on stdout, not stderr
+        let said = String::from_utf8_lossy(&out.stdout);
+        let tail: Vec<&str> = said.lines().filter(|l| !l.trim().is_empty()).rev().take(4).collect();
+        Err(format!("diskpart failed: {}", tail.into_iter().rev().collect::<Vec<_>>().join(" / ")))
+    }
+}
+
+#[cfg(not(windows))]
+fn run_diskpart(_script: &str) -> Result<(), String> {
+    Err("Preparing a drive is only implemented on Windows so far".into())
+}
+
+/// Put grub.cfg on the freshly formatted data partition.
+#[cfg(windows)]
+fn write_grub_cfg() -> Result<(), String> {
+    let drive = find_labelled(DATA_LABEL)
+        .ok_or_else(|| format!("Could not find the {DATA_LABEL} partition after formatting it"))?;
+    let dir = std::path::Path::new(&drive).join("boot").join("grub");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let cfg = dir.join("grub.cfg");
+    std::fs::write(&cfg, grub_cfg()).map_err(|e| format!("{}: {e}", cfg.display()))
+}
+
+#[cfg(not(windows))]
+fn write_grub_cfg() -> Result<(), String> {
+    Err("Preparing a drive is only implemented on Windows so far".into())
+}
+
+/// Which drive letter carries a volume with this label.
+#[cfg(windows)]
+fn find_labelled(label: &str) -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetVolumeInformationW;
+
+    for c in b'A'..=b'Z' {
+        let root = format!("{}:\\", c as char);
+        let wide: Vec<u16> = std::ffi::OsStr::new(&root).encode_wide().chain(Some(0)).collect();
+        let mut name = [0u16; 64];
+        let ok = unsafe {
+            GetVolumeInformationW(PCWSTR(wide.as_ptr()), Some(&mut name), None, None, None, None)
+        };
+        if ok.is_ok() {
+            let end = name.iter().position(|&x| x == 0).unwrap_or(0);
+            if String::from_utf16_lossy(&name[..end]).eq_ignore_ascii_case(label) {
+                return Some(format!("{}:\\", c as char));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod prepare_tests {
+    use super::*;
+
+    #[test]
+    fn the_disk_number_comes_out_of_the_device_path() {
+        assert_eq!(disk_number(r"\.\PhysicalDrive0"), Some(0));
+        assert_eq!(disk_number(r"\.\PhysicalDrive7"), Some(7));
+        assert_eq!(disk_number(r"\.\PhysicalDrive12"), Some(12));
+        assert_eq!(disk_number("/dev/sdb"), None);
+        assert_eq!(disk_number(""), None);
+    }
+
+    #[test]
+    fn the_script_targets_the_disk_it_was_given() {
+        let s = diskpart_script(3, 64);
+        assert!(s.starts_with("select disk 3\n"), "the very first line has to pick the disk");
+        assert!(s.contains("\nclean\n"), "an old layout has to go first");
+        assert!(s.contains("convert gpt"));
+    }
+
+    #[test]
+    fn the_script_makes_both_partitions_the_right_way() {
+        let s = diskpart_script(1, 64);
+        assert!(s.contains("create partition efi size=64"));
+        assert!(s.contains("format fs=fat32 quick label=SKJBOOT"), "firmware only reads FAT32");
+        assert!(s.contains("create partition primary"));
+        assert!(s.contains(&format!("format fs=exfat quick label={DATA_LABEL}")), "exFAT so a 4 GB+ ISO fits");
+    }
+
+    #[test]
+    fn the_esp_size_follows_the_plan() {
+        let l = plan(58 * 1024u64.pow(3)).unwrap();
+        let s = diskpart_script(1, l.esp_size / (1024 * 1024));
+        assert!(s.contains("size=64"), "the script and the plan must agree");
+    }
+
+    #[test]
+    fn the_script_ends_cleanly() {
+        assert!(diskpart_script(0, 64).ends_with("exit\n"), "diskpart should not be left waiting");
+    }
+}

@@ -33,6 +33,7 @@ fn main() {
         "list" => list(all),
         "selftest" => selftest(&args),
         "write" => write_iso(&args),
+        "multiboot" => multiboot_cmd(&args),
         "help" | "--help" | "-h" => help(),
         other => {
             eprintln!("Unknown command: {other}\n");
@@ -49,7 +50,11 @@ fn help() {
     println!("  skj-flash selftest <device> [MB]");
     println!("                            prove writing works, then restore the drive");
     println!("  skj-flash write <device> <image.iso>");
-    println!("                            write an image, ERASING everything on the drive\n");
+    println!("                            write an image, ERASING everything on the drive");
+    println!("  skj-flash multiboot <device>");
+    println!("                            lay the drive out for many ISOs, ERASING it\n");
+    println!("multiboot makes a drive you copy .iso files onto and pick from at boot, instead");
+    println!("of one image filling the whole stick.\n");
     println!("selftest backs up the first few MB, writes a pattern, reads it back to check it");
     println!("really landed, then writes the original bytes back and checks those too. It needs");
     println!("administrator, and if it finishes it leaves the drive exactly as it was.");
@@ -216,6 +221,49 @@ fn write_iso(args: &[String]) {
         Ok(()) => println!("\nDone. {} written to {}.", image.display(), dev.path),
         Err(e) => {
             eprintln!("\n{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn multiboot_cmd(args: &[String]) {
+    let Some(target) = args.get(1) else {
+        eprintln!("Usage: skj-flash multiboot <device>");
+        std::process::exit(2);
+    };
+    if !write::is_elevated() {
+        eprintln!("SKJ Flash needs to run as administrator to repartition a drive.");
+        std::process::exit(1);
+    }
+    let Some(dev) = disk::list(false).into_iter().find(|d| d.path.eq_ignore_ascii_case(target)) else {
+        eprintln!("{target} is not one of the drives SKJ Flash is willing to write to.");
+        std::process::exit(2);
+    };
+
+    let size = disk::human_size(dev.size);
+    println!("About to ERASE this drive and lay it out for multiboot:
+");
+    println!("    {dev}
+");
+    print!("Type the drive's size exactly ({size}) to go ahead, or anything else to stop: ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() || line.trim() != size {
+        println!("Stopped. Nothing was written.");
+        return;
+    }
+
+    println!();
+    match multiboot::prepare(&dev, |m| println!("  {m}")) {
+        Ok(()) => {
+            println!("
+Copy .iso files onto the {} drive and they appear in the boot menu.", multiboot::DATA_LABEL);
+            println!("
+{}", multiboot::BOOTLOADER_NOTE);
+        }
+        Err(e) => {
+            eprintln!("
+{e}");
             std::process::exit(1);
         }
     }

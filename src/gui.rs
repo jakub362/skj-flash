@@ -5,6 +5,7 @@
 //! people end up pulling the stick.
 
 use crate::disk::{self, Device};
+use crate::multiboot;
 use crate::write;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 use std::rc::Rc;
@@ -128,6 +129,33 @@ pub fn run() -> Result<(), slint::PlatformError> {
     {
         let c = cancel.clone();
         ui.global::<S>().on_cancel(move || c.store(true, Ordering::SeqCst));
+    }
+
+    {
+        let (w, d) = (ui.as_weak(), devices.clone());
+        ui.global::<S>().on_multiboot(move || {
+            let Some(dev) = selected(&w, &d) else { return };
+            start(&w, format!("Preparing {} for multiboot…", dev.model));
+            let w2 = w.clone();
+            std::thread::spawn(move || {
+                let w3 = w2.clone();
+                let r = multiboot::prepare(&dev, move |m| {
+                    report(&w3, 0.5, Some(m.to_string()));
+                });
+                match r {
+                    Ok(()) => finish(
+                        &w2,
+                        true,
+                        format!(
+                            "Ready. Copy .iso files onto the {} drive. {}",
+                            multiboot::DATA_LABEL,
+                            multiboot::BOOTLOADER_NOTE.replace('\n', " ")
+                        ),
+                    ),
+                    Err(e) => finish(&w2, false, e),
+                }
+            });
+        });
     }
 
     {

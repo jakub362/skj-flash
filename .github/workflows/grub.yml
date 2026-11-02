@@ -1,0 +1,60 @@
+# Builds the GRUB2 EFI binary that a multiboot drive boots from.
+#
+# SKJ Flash cannot compile GRUB itself, and shipping someone else's prebuilt binary means trusting
+# a blob nobody can account for. So it is built here, from the distribution's own GRUB source, with
+# exactly the modules the menu in src/multiboot.rs uses baked in - grub-mkstandalone produces one
+# self-contained EFI file that needs nothing else on the ESP.
+#
+# GPL-3.0 is satisfied by this workflow plus the sources it names: anyone can rebuild the binary.
+name: Build GRUB
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/grub.yml'
+      - 'src/multiboot.rs'
+
+jobs:
+  grub:
+    name: grub-mkstandalone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: GRUB and its EFI target
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            grub-efi-amd64-bin grub-common xorriso mtools
+
+      - name: Build a standalone BOOTX64.EFI
+        run: |
+          mkdir -p out/EFI/BOOT
+          # The modules the generated grub.cfg relies on. Anything missing here becomes a
+          # "command not found" at boot, on a screen with no way to fix it.
+          grub-mkstandalone \
+            --format=x86_64-efi \
+            --output=out/EFI/BOOT/BOOTX64.EFI \
+            --modules="part_gpt part_msdos exfat fat iso9660 loopback search search_label \
+                       normal configfile linux chain echo test regexp probe all_video gfxterm \
+                       halt reboot" \
+            --locales="" \
+            --fonts="" \
+            "boot/grub/grub.cfg=/dev/null"
+
+      - name: It has to be a real EFI binary
+        run: |
+          f=out/EFI/BOOT/BOOTX64.EFI
+          ls -lh "$f"
+          file "$f" | tee /dev/stderr | grep -q "PE32+" \
+            || { echo "::error::Not a PE32+ EFI binary"; exit 1; }
+          # a standalone image with those modules is never this small
+          [ "$(stat -c%s "$f")" -gt 500000 ] \
+            || { echo "::error::Suspiciously small - modules probably did not go in"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grub-efi
+          path: out/EFI/BOOT/BOOTX64.EFI
+          if-no-files-found: error

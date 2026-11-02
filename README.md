@@ -16,10 +16,12 @@ Windows To Go are still to come.
 Raw disk access needs administrator (Windows) or root (Linux, macOS).
 
 ```
+skj-flash                             open the window
 skj-flash list                        drives it is willing to write to
 skj-flash list --all                  every drive it can see, with warnings
 skj-flash selftest <device> [MB]      prove writing works, then restore the drive
 skj-flash write <device> <image.iso>  write an image, ERASING the drive
+skj-flash multiboot <device>          lay the drive out for many ISOs, ERASING it
 ```
 
 `selftest` is the safe way to check a drive and the program before trusting either: it backs up the

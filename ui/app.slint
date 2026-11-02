@@ -49,6 +49,9 @@ export global S {
     callback start-write();
     callback cancel();
     callback elevate();
+    callback multiboot();
+    /// what the confirmation is for: 0 write an image, 1 prepare for multiboot
+    in-out property <int> confirm-kind: 0;
 }
 
 component Btn inherits Rectangle {
@@ -311,10 +314,15 @@ export component AppWindow inherits Window {
                 clicked => { S.cancel(); }
             }
             Btn {
+                text: "Multiboot…";
+                enabled: S.elevated && S.selected >= 0 && S.state != 1;
+                clicked => { S.confirm-typed = ""; S.confirm-kind = 1; S.confirming = true; }
+            }
+            Btn {
                 text: "Write";
                 danger: true;
                 enabled: S.elevated && S.selected >= 0 && S.image-path != "" && S.state != 1;
-                clicked => { S.confirm-typed = ""; S.confirming = true; }
+                clicked => { S.confirm-typed = ""; S.confirm-kind = 0; S.confirming = true; }
             }
         }
     }
@@ -336,7 +344,7 @@ export component AppWindow inherits Window {
                 padding: 22px;
                 spacing: 12px;
                 Text {
-                    text: "This erases the drive";
+                    text: S.confirm-kind == 1 ? "Lay this drive out for multiboot" : "This erases the drive";
                     color: Theme.text;
                     font-size: 17px;
                     font-weight: 700;
@@ -374,7 +382,10 @@ export component AppWindow inherits Window {
                         width: parent.width - 24px;
                         x: 12px;
                         accepted => {
-                            if (self.text == S.confirm-want) { S.confirming = false; S.start-write(); }
+                            if (self.text == S.confirm-want) {
+                                S.confirming = false;
+                                if (S.confirm-kind == 1) { S.multiboot(); } else { S.start-write(); }
+                            }
                         }
                     }
                 }
@@ -386,10 +397,13 @@ export component AppWindow inherits Window {
                         clicked => { S.confirming = false; }
                     }
                     Btn {
-                        text: "Erase and write";
+                        text: S.confirm-kind == 1 ? "Erase and prepare" : "Erase and write";
                         danger: true;
                         enabled: S.confirm-typed == S.confirm-want;
-                        clicked => { S.confirming = false; S.start-write(); }
+                        clicked => {
+                            S.confirming = false;
+                            if (S.confirm-kind == 1) { S.multiboot(); } else { S.start-write(); }
+                        }
                     }
                 }
             }
