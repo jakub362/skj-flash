@@ -126,6 +126,10 @@ for iso in ($data)/*.iso ($data)/isos/*.iso ($data)/ISO/*.iso; do
       elif [ -f (loop)/boot/x86_64/loader/linux ]; then
         linux (loop)/boot/x86_64/loader/linux iso-scan/filename="$file"
         initrd (loop)/boot/x86_64/loader/initrd
+      elif [ -f (loop)/boot/vmlinuz64 ]; then
+        # Tiny Core and friends: kernel and gzipped root beside each other
+        linux (loop)/boot/vmlinuz64 loglevel=3
+        initrd (loop)/boot/corepure64.gz
       elif [ -f (loop)/EFI/BOOT/BOOTX64.EFI ]; then
         # anything with its own EFI loader, Windows installers included
         chainloader (loop)/EFI/BOOT/BOOTX64.EFI

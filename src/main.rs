@@ -9,6 +9,7 @@
 //!     skj-flash selftest <dev>    prove writing works, then put the drive back as it was
 
 mod disk;
+mod iso;
 mod multiboot;
 mod gui;
 mod write;
@@ -34,6 +35,7 @@ fn main() {
         "selftest" => selftest(&args),
         "write" => write_iso(&args),
         "multiboot" => multiboot_cmd(&args),
+        "inspect" => inspect_cmd(&args),
         "help" | "--help" | "-h" => help(),
         other => {
             eprintln!("Unknown command: {other}\n");
@@ -185,6 +187,21 @@ fn write_iso(args: &[String]) {
 
     // This one really does erase the drive, so it says so and makes the person type the size
     // back. A y/n is too easy to answer without reading; repeating "58.6 GB" is not.
+    // Writing a plain CD image byte for byte copies it perfectly and boots nothing. Say so
+    // before the write, not after.
+    match iso::inspect(image) {
+        Ok(info) => {
+            if let Some(w) = info.warning() {
+                println!("
+  !  {w}
+");
+            }
+        }
+        Err(e) => println!("
+  !  Could not read the image to check it: {e}
+"),
+    }
+
     let size = disk::human_size(dev.size);
     println!("About to ERASE this drive and write {}:\n", image.display());
     println!("    {dev}\n");
@@ -264,6 +281,30 @@ Copy .iso files onto the {} drive and they appear in the boot menu.", multiboot:
         Err(e) => {
             eprintln!("
 {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn inspect_cmd(args: &[String]) {
+    let Some(image) = args.get(1) else {
+        eprintln!("Usage: skj-flash inspect <image.iso>");
+        std::process::exit(2);
+    };
+    match iso::inspect(std::path::Path::new(image)) {
+        Ok(i) => {
+            println!("{image}");
+            println!("  size       {}", disk::human_size(i.size));
+            println!("  boots as   {:?}{}", i.boot, if i.gpt { " (+GPT)" } else { "" });
+            match i.warning() {
+                None => println!("
+  Writing this to a drive will boot."),
+                Some(w) => println!("
+  {w}"),
+            }
+        }
+        Err(e) => {
+            eprintln!("{e}");
             std::process::exit(1);
         }
     }
