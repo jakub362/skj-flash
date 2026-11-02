@@ -1,13 +1,17 @@
 //! SKJ Flash - make bootable USB drives on Windows, Linux and macOS.
 //!
-//! Right now this is a CLI around the part that matters: finding drives safely. The Slint UI
-//! comes once the dangerous half is proven on real hardware, because a window makes it harder
-//! to see what the code actually decided, not easier.
+//! Right now this is a CLI around the parts that matter: finding drives safely, and writing to
+//! them. The Slint UI comes once the dangerous half is proven on real hardware, because a window
+//! makes it harder to see what the code actually decided, not easier.
 //!
-//!     skj-flash list          drives it is willing to write to
-//!     skj-flash list --all    every drive it can see, including internal ones, with warnings
+//!     skj-flash list              drives it is willing to write to
+//!     skj-flash list --all        every drive it can see, with warnings
+//!     skj-flash selftest <dev>    prove writing works, then put the drive back as it was
 
 mod disk;
+mod write;
+
+use std::io::Write as _;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -16,6 +20,7 @@ fn main() {
 
     match cmd {
         "list" => list(all),
+        "selftest" => selftest(&args),
         "help" | "--help" | "-h" => help(),
         other => {
             eprintln!("Unknown command: {other}\n");
@@ -27,9 +32,13 @@ fn main() {
 
 fn help() {
     println!("SKJ Flash {}\n", env!("CARGO_PKG_VERSION"));
-    println!("  skj-flash list         drives it is willing to write to");
-    println!("  skj-flash list --all   every drive, including internal ones\n");
-    println!("Nothing here writes to a disk yet.");
+    println!("  skj-flash list            drives it is willing to write to");
+    println!("  skj-flash list --all      every drive, including internal ones");
+    println!("  skj-flash selftest <device> [MB]");
+    println!("                            prove writing works, then restore the drive\n");
+    println!("selftest backs up the first few MB, writes a pattern, reads it back to check it");
+    println!("really landed, then writes the original bytes back and checks those too. It needs");
+    println!("administrator, and if it finishes it leaves the drive exactly as it was.");
 }
 
 fn list(all: bool) {
@@ -73,5 +82,61 @@ fn list(all: bool) {
     if all {
         println!("\nDrives without [not removable] / [internal bus] are the ones SKJ Flash offers by default.");
         println!("The disk the system runs from is never offered, whatever flags are passed.");
+    }
+}
+
+fn selftest(args: &[String]) {
+    let Some(target) = args.get(1) else {
+        eprintln!("Which drive? Run `skj-flash list` first, then pass the device path.");
+        std::process::exit(2);
+    };
+    let mb: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8);
+
+    if !write::is_elevated() {
+        eprintln!("SKJ Flash needs to run as administrator to touch a raw disk.");
+        std::process::exit(1);
+    }
+
+    // Only a device that came out of the safety rules can be chosen - never a typed path.
+    let Some(dev) = disk::list(false).into_iter().find(|d| d.path.eq_ignore_ascii_case(target)) else {
+        eprintln!("{target} is not one of the drives SKJ Flash is willing to write to.");
+        eprintln!("Run `skj-flash list` to see which are.");
+        std::process::exit(2);
+    };
+
+    println!("Self-test on {dev}");
+    println!("{mb} MB, backed up first and restored afterwards.\n");
+
+    let mut last = String::new();
+    let res = write::self_test(&dev, mb * 1024 * 1024, |p| {
+        let line = format!("{:>5.1}%  {:.1} MB/s", p.percent(), p.speed / 1_048_576.0);
+        if line != last {
+            print!("\r{line}   ");
+            let _ = std::io::stdout().flush();
+            last = line;
+        }
+    });
+    println!();
+
+    match res {
+        Ok(r) => {
+            println!("\n  wrote and read back   {}", if r.wrote_ok { "OK" } else { "MISMATCH" });
+            println!("  original restored     {}", if r.restored_ok { "OK" } else { "MISMATCH" });
+            println!(
+                "  write {:.1} MB/s, read {:.1} MB/s",
+                r.write_speed / 1_048_576.0,
+                r.read_speed / 1_048_576.0
+            );
+            if r.wrote_ok && r.restored_ok {
+                println!("\nThe drive is exactly as it was.");
+            } else {
+                println!("\nSomething did not match - the drive may need reformatting.");
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("\n{e}");
+            std::process::exit(1);
+        }
     }
 }
