@@ -140,7 +140,7 @@ fn write_at(dev: &Device, offset: u64, data: &[u8], mut progress: impl FnMut(Pro
 }
 
 /// Write a disk image over the whole device. Not reachable from the CLI yet.
-#[allow(dead_code)]
+
 pub fn write_image(dev: &Device, image: &Path, mut progress: impl FnMut(Progress)) -> Result<(), String> {
     if dev.system {
         return Err("Refusing: that is the disk the system runs from".into());
@@ -186,7 +186,7 @@ mod imp {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::Storage::FileSystem::{
-        CreateFileW, FlushFileBuffers, FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH,
+        CreateFileW, FlushFileBuffers, FILE_FLAG_WRITE_THROUGH,
         FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
     use windows::Win32::System::Ioctl::{FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, FSCTL_UNLOCK_VOLUME};

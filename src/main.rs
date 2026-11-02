@@ -21,6 +21,7 @@ fn main() {
     match cmd {
         "list" => list(all),
         "selftest" => selftest(&args),
+        "write" => write_iso(&args),
         "help" | "--help" | "-h" => help(),
         other => {
             eprintln!("Unknown command: {other}\n");
@@ -35,7 +36,9 @@ fn help() {
     println!("  skj-flash list            drives it is willing to write to");
     println!("  skj-flash list --all      every drive, including internal ones");
     println!("  skj-flash selftest <device> [MB]");
-    println!("                            prove writing works, then restore the drive\n");
+    println!("                            prove writing works, then restore the drive");
+    println!("  skj-flash write <device> <image.iso>");
+    println!("                            write an image, ERASING everything on the drive\n");
     println!("selftest backs up the first few MB, writes a pattern, reads it back to check it");
     println!("really landed, then writes the original bytes back and checks those too. It needs");
     println!("administrator, and if it finishes it leaves the drive exactly as it was.");
@@ -122,6 +125,7 @@ fn selftest(args: &[String]) {
         Ok(r) => {
             println!("\n  wrote and read back   {}", if r.wrote_ok { "OK" } else { "MISMATCH" });
             println!("  original restored     {}", if r.restored_ok { "OK" } else { "MISMATCH" });
+            println!("  tested over           {}", disk::human_size(r.bytes));
             println!(
                 "  write {:.1} MB/s, read {:.1} MB/s",
                 r.write_speed / 1_048_576.0,
@@ -134,6 +138,71 @@ fn selftest(args: &[String]) {
                 std::process::exit(1);
             }
         }
+        Err(e) => {
+            eprintln!("\n{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn write_iso(args: &[String]) {
+    let (Some(target), Some(image)) = (args.get(1), args.get(2)) else {
+        eprintln!("Usage: skj-flash write <device> <image.iso>");
+        std::process::exit(2);
+    };
+    let image = std::path::Path::new(image);
+    if !image.is_file() {
+        eprintln!("{} is not a file", image.display());
+        std::process::exit(2);
+    }
+
+    if !write::is_elevated() {
+        eprintln!("SKJ Flash needs to run as administrator to touch a raw disk.");
+        std::process::exit(1);
+    }
+
+    let Some(dev) = disk::list(false).into_iter().find(|d| d.path.eq_ignore_ascii_case(target)) else {
+        eprintln!("{target} is not one of the drives SKJ Flash is willing to write to.");
+        eprintln!("Run `skj-flash list` to see which are.");
+        std::process::exit(2);
+    };
+
+    // This one really does erase the drive, so it says so and makes the person type the size
+    // back. A y/n is too easy to answer without reading; repeating "58.6 GB" is not.
+    let size = disk::human_size(dev.size);
+    println!("About to ERASE this drive and write {}:\n", image.display());
+    println!("    {dev}\n");
+    if !dev.mounts.is_empty() {
+        println!("  Everything on {} will be lost.\n", dev.mounts.join(", "));
+    }
+    print!("Type the drive's size exactly ({size}) to go ahead, or anything else to stop: ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() || line.trim() != size {
+        println!("Stopped. Nothing was written.");
+        return;
+    }
+
+    println!();
+    let mut last = String::new();
+    let res = write::write_image(&dev, image, |p| {
+        let line = format!(
+            "{:>5.1}%  {} of {}  {:.1} MB/s",
+            p.percent(),
+            disk::human_size(p.done),
+            disk::human_size(p.total),
+            p.speed / 1_048_576.0
+        );
+        if line != last {
+            print!("\r{line}   ");
+            let _ = std::io::stdout().flush();
+            last = line;
+        }
+    });
+    println!();
+
+    match res {
+        Ok(()) => println!("\nDone. {} written to {}.", image.display(), dev.path),
         Err(e) => {
             eprintln!("\n{e}");
             std::process::exit(1);
